@@ -22,4 +22,3 @@ training:
   skip_unfinished_episodes: false
   ckpt_save_interval: 100
   eval_interval: 10
-  memory_efficient_adamw: false
