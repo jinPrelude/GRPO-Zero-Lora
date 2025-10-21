@@ -1,3 +1,4 @@
+from collections import OrderedDict
 import html
 import time
 from argparse import ArgumentParser
@@ -16,20 +17,45 @@ from grpo import rollout, update_policy
 from qwen2_model import Transformer, Lora
 from tokenizer import Tokenizer
 
-def apply_lora(model: Transformer, r=8, alpha=32):
+def apply_lora(model: Transformer, r=8, alpha=32, dropout=0.0):
     for p in model.parameters():
         p.requires_grad = False
 
     trainable_params = []
     for block in model.layers:
-        block.mlp.up_proj = Lora(block.mlp.up_proj, r, alpha)
-        block.mlp.down_proj = Lora(block.mlp.down_proj, r, alpha)
-        block.mlp.gate_proj = Lora(block.mlp.gate_proj, r, alpha)
+        block.mlp.up_proj = Lora(block.mlp.up_proj, r, alpha, dropout)
+        # block.mlp.down_proj = Lora(block.mlp.down_proj, r, alpha, dropout)
+        # block.mlp.gate_proj = Lora(block.mlp.gate_proj, r, alpha, dropout)
 
         trainable_params += block.mlp.up_proj.trainable_parameters()
-        trainable_params += block.mlp.down_proj.trainable_parameters()
-        trainable_params += block.mlp.gate_proj.trainable_parameters()
+        # trainable_params += block.mlp.down_proj.trainable_parameters()
+        # trainable_params += block.mlp.gate_proj.trainable_parameters()
     return model, trainable_params
+
+@torch.no_grad()
+def export_lora_merged_state_dict(model: Transformer):
+    "Return a state dict with LoRA weights merged into the base weights & LoRA weights removed."
+    og_state_dict = model.state_dict()
+    merged_linear = {}
+    lora_weights = set()
+    for name, module in model.named_modules():
+        if isinstance(module, Lora):
+            base_key = f"{name}.linear.weight"
+            lora_weights.add(f"{name}.A.weight")
+            lora_weights.add(f"{name}.B.weight")
+
+            base_w = module.linear.weight.data
+            delta = module.scale * (module.B.weight.data @ module.A.weight.data)
+            merged_linear[base_key] = (base_w + delta).to(base_w.dtype)
+    out = OrderedDict()
+    for k, v in og_state_dict.items():
+        if k in lora_weights: # skip LoRA weights
+            continue
+        if k in merged_linear: # replace with merged weights
+            out[k] = merged_linear[k].clone()
+        else: # keep original weights
+            out[k] = v
+    return out
 
 def evaluate(model, tokenizer, device, dtype, config):
     test_dataset = CountdownTasksDataset(
@@ -107,7 +133,7 @@ def main(config_path: str):
 
     if config["training"]["use_lora"]:
         model, trainable_parameters = apply_lora(
-            model, config["training"]["lora_rank"], config["training"]["lora_alpha"]
+            model, config["training"]["lora_rank"], config["training"]["lora_alpha"], config["training"]["lora_dropout"]
         )
 
     optimizer = AdamW(
@@ -206,7 +232,10 @@ def main(config_path: str):
         # save checkpoint
         if step % config["training"]["ckpt_save_interval"] == 0:
             output_file = ckpt_dir / f"ckpt_{step:06d}.pt"
-            torch.save(model.state_dict(), output_file)
+            if config["training"]["use_lora"]:
+                torch.save(export_lora_merged_state_dict(model), output_file)
+            else:
+                torch.save(model.state_dict(), output_file)
             print(f"Saved checkpoint to {output_file}")
 
 

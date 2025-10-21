@@ -173,7 +173,7 @@ class FeedForward(nn.Module):
         return x
 
 class Lora(nn.Module):
-    def __init__(self, linear: nn.Linear, r: int=8, alpha: int=32):
+    def __init__(self, linear: nn.Linear, r: int=8, alpha: int=32, dropout: float=0.0):
         super().__init__()
         assert r != 0
         self.r = r
@@ -182,11 +182,12 @@ class Lora(nn.Module):
         self.linear = linear
         self.A = nn.Linear(linear.in_features, r, bias=False, dtype=linear.weight.dtype, device=linear.weight.device)
         self.B = nn.Linear(r, linear.out_features, bias=False, dtype=linear.weight.dtype, device=linear.weight.device)
+        self.dropout = nn.Dropout(dropout)
         nn.init.kaiming_uniform_(self.A.weight, a=math.sqrt(5)) # why 5?
         nn.init.zeros_(self.B.weight)
     def forward(self, x):
         h = self.linear(x)
-        return h + self.scale * self.B(self.A(x))
+        return h + self.scale * self.B(self.dropout(self.A(x)))
     
     def trainable_parameters(self):
         params = list(p for p in self.A.parameters()) + list(p for p in self.B.parameters())
