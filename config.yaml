@@ -14,7 +14,7 @@ training:
   # Number of examples per gradient accumulation step
   micro_batch_size: 2
   max_grad_norm: 1.0
-  learning_rate: 1.0e-5
+  learning_rate: 1.0e-4
   weight_decay: 0.0
   betas: [0.9, 0.999]
   ckpt_dir: "ckpt"
@@ -22,3 +22,6 @@ training:
   skip_unfinished_episodes: false
   ckpt_save_interval: 100
   eval_interval: 10
+  use_lora: true
+  lora_rank: 32
+  lora_alpha: 32

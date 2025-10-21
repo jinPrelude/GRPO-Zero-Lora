@@ -1,3 +1,4 @@
+import math
 import json
 from dataclasses import dataclass
 from pathlib import Path
@@ -171,6 +172,25 @@ class FeedForward(nn.Module):
         x = self.down_proj(F.silu(self.gate_proj(x)) * self.up_proj(x))
         return x
 
+class Lora(nn.Module):
+    def __init__(self, linear: nn.Linear, r: int=8, alpha: int=32):
+        super().__init__()
+        assert r != 0
+        self.r = r
+        self.scale = alpha / r
+
+        self.linear = linear
+        self.A = nn.Linear(linear.in_features, r, bias=False, dtype=linear.weight.dtype, device=linear.weight.device)
+        self.B = nn.Linear(r, linear.out_features, bias=False, dtype=linear.weight.dtype, device=linear.weight.device)
+        nn.init.kaiming_uniform_(self.A.weight, a=math.sqrt(5)) # why 5?
+        nn.init.zeros_(self.B.weight)
+    def forward(self, x):
+        h = self.linear(x)
+        return h + self.scale * self.B(self.A(x))
+    
+    def trainable_parameters(self):
+        params = list(p for p in self.A.parameters()) + list(p for p in self.B.parameters())
+        return params
 
 class TransformerBlock(nn.Module):
     def __init__(self, layer_id: int, args: Qwen2Config):

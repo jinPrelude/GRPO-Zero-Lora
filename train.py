@@ -13,9 +13,23 @@ from torch.utils.tensorboard.writer import SummaryWriter
 
 from countdown_task import CountdownTasksDataset, reward_function
 from grpo import rollout, update_policy
-from qwen2_model import Transformer
+from qwen2_model import Transformer, Lora
 from tokenizer import Tokenizer
 
+def apply_lora(model: Transformer, r=8, alpha=32):
+    for p in model.parameters():
+        p.requires_grad = False
+
+    trainable_params = []
+    for block in model.layers:
+        block.mlp.up_proj = Lora(block.mlp.up_proj, r, alpha)
+        block.mlp.down_proj = Lora(block.mlp.down_proj, r, alpha)
+        block.mlp.gate_proj = Lora(block.mlp.gate_proj, r, alpha)
+
+        trainable_params += block.mlp.up_proj.trainable_parameters()
+        trainable_params += block.mlp.down_proj.trainable_parameters()
+        trainable_params += block.mlp.gate_proj.trainable_parameters()
+    return model, trainable_params
 
 def evaluate(model, tokenizer, device, dtype, config):
     test_dataset = CountdownTasksDataset(
@@ -89,9 +103,15 @@ def main(config_path: str):
     )
 
     model = Transformer.from_pretrained(pretrained_model_path, device=device).train()
+    trainable_parameters = model.parameters()
+
+    if config["training"]["use_lora"]:
+        model, trainable_parameters = apply_lora(
+            model, config["training"]["lora_rank"], config["training"]["lora_alpha"]
+        )
 
     optimizer = AdamW(
-        model.parameters(),
+        trainable_parameters,
         lr=config["training"]["learning_rate"],
         weight_decay=config["training"]["weight_decay"],
         betas=config["training"]["betas"],
@@ -114,6 +134,7 @@ def main(config_path: str):
         )
         if config["training"]["skip_unfinished_episodes"]:
             episodes = [episode for episode in episodes if episode.is_finished]
+        update_policy_start = time.time()
         results = update_policy(
             model=model,
             optimizer=optimizer,
@@ -124,9 +145,11 @@ def main(config_path: str):
             device=device,
             dtype=dtype,
         )
+        update_policy_end = time.time()
         torch.cuda.synchronize()
         end_time = time.time()
         duration = end_time - start_time
+        update_duration = update_policy_end - update_policy_start
         start_time = end_time
 
         # compute and log important metrics
@@ -171,6 +194,10 @@ def main(config_path: str):
         tb_writer.add_scalar("learning_rate", lr, step)
         tb_writer.add_scalar("mean_response_len", mean_response_len, step)
         tb_writer.add_scalar("entropy", entropy, step)
+        tb_writer.add_scalar("update_policy_duration", update_duration, step)
+        if device.type == "cuda":
+            vram_usage = torch.cuda.memory_allocated(device) / (1024 ** 3)  # GB
+            tb_writer.add_scalar("vram_usage", vram_usage, step)
         for i, episode in enumerate(episodes):
             # TensorBoard treats text as markdown.
             text = html.escape(episode.text)
