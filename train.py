@@ -34,7 +34,7 @@ def apply_lora(model: Transformer, r=8, alpha=32, dropout=0.0):
 
 @torch.no_grad()
 def export_lora_merged_state_dict(model: Transformer):
-    "Return a state dict with LoRA weights merged into the base weights & LoRA weights removed."
+    "Return a state_dict with LoRA deltas merged into feed_forward weights & adapter weights removed."
     og_state_dict = model.state_dict()
     merged_linear = {}
     lora_weights = set()
@@ -163,6 +163,7 @@ def main(config_path: str):
         update_policy_start = time.time()
         results = update_policy(
             model=model,
+            trainable_parameters=trainable_parameters,
             optimizer=optimizer,
             episodes=episodes,
             micro_batch_size=config["training"]["micro_batch_size"],

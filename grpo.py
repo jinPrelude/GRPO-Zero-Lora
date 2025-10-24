@@ -139,6 +139,7 @@ def compute_entropy(logits: torch.Tensor) -> torch.Tensor:
 
 def update_policy(
     model,
+    trainable_parameters: torch.nn.Parameter,
     optimizer,
     episodes: List[Episode],
     micro_batch_size: int,
@@ -151,7 +152,6 @@ def update_policy(
     episodes = normalize_rewards_per_group(episodes)
     # sort episodes by token length for efficient (micro-)batching
     episodes.sort(key=lambda x: len(x.prefix_token_ids) + len(x.generated_token_ids))
-    num_micro_batches = math.ceil(len(episodes) / micro_batch_size)
     num_target_tokens = sum(len(episode.generated_token_ids) for episode in episodes)
     entropy = 0.0
 
@@ -212,7 +212,7 @@ def update_policy(
 
     # update the policy
     grad_norm = torch.nn.utils.clip_grad_norm_(
-        model.parameters(), max_norm=max_grad_norm
+        trainable_parameters, max_norm=max_grad_norm
     )
     optimizer.step()
     optimizer.zero_grad(set_to_none=True)
