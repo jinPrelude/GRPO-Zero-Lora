@@ -10,8 +10,7 @@ import torch
 import yaml
 from torch.utils.data import DataLoader
 from torch.optim import AdamW
-from torch.utils.tensorboard.writer import SummaryWriter
-
+import wandb
 from countdown_task import CountdownTasksDataset, reward_function
 from grpo import rollout, update_policy
 from qwen2_model import Transformer, Lora
@@ -109,7 +108,20 @@ def main(config_path: str):
     NUM_ANSWERS_PER_QUESTION = BATCH_SIZE // NUM_QUESTIONS_PER_BATCH
 
     current_time = datetime.now().strftime(r"%Y%m%d-%H%M%S")
-    tb_writer = SummaryWriter(log_dir=f"{config['training']['log_dir']}/{current_time}")
+    if config["training"]["use_lora"]:
+        run_name = f"LoRA-rank_{config['training']['lora_rank']}-alpha_{config['training']['lora_alpha']}-dropout_{config['training']['lora_dropout']}-{current_time}"
+    else:
+        run_name = f"FullFT-{current_time}"
+
+    log_dir_path = Path(config["training"]["log_dir"])
+    log_dir_path.mkdir(parents=True, exist_ok=True)
+    wandb_run = wandb.init(
+        project=config.get("wandb_project", "GRPO-Zero"),
+        name=run_name,
+        dir=str(log_dir_path),
+        config=config,
+    )
+    
     tokenizer = Tokenizer(str(pretrained_model_path / "tokenizer.json"))
 
     train_dataset = CountdownTasksDataset(
@@ -209,24 +221,27 @@ def main(config_path: str):
         if step % config["training"]["eval_interval"] == 0:
             eval_success_rate = evaluate(model, tokenizer, device, dtype, config)
             print(f"\rEval success rate: {eval_success_rate:.2f}" + " " * 100)
-            tb_writer.add_scalar("success_rate/eval", eval_success_rate, step)
+            wandb.log({"success_rate/eval": eval_success_rate}, step=step)
 
-        tb_writer.add_scalar("loss", loss, step)
-        tb_writer.add_scalar("mean_reward", mean_reward, step)
-        tb_writer.add_scalar("std_reward", std_reward, step)
-        tb_writer.add_scalar("success_rate/train", success_rate, step)
-        tb_writer.add_scalar("format_reward", format_reward, step)
-        tb_writer.add_scalar("grad_norm", grad_norm, step)
-        tb_writer.add_scalar("duration", duration, step)
-        tb_writer.add_scalar("num_finished_episodes", num_finished_episodes, step)
-        tb_writer.add_scalar("learning_rate", lr, step)
-        tb_writer.add_scalar("mean_response_len", mean_response_len, step)
-        tb_writer.add_scalar("entropy", entropy, step)
-        tb_writer.add_scalar("update_duration", update_duration, step)
+        metrics = {
+            "loss": loss,
+            "mean_reward": mean_reward,
+            "std_reward": std_reward,
+            "success_rate/train": success_rate,
+            "format_reward": format_reward,
+            "grad_norm": grad_norm,
+            "duration": duration,
+            "num_finished_episodes": num_finished_episodes,
+            "learning_rate": lr,
+            "mean_response_len": mean_response_len,
+            "entropy": entropy,
+            "update_duration": update_duration,
+        }
+        wandb.log(metrics, step=step)
         for i, episode in enumerate(episodes):
             # TensorBoard treats text as markdown.
             text = html.escape(episode.text)
-            tb_writer.add_text(f"text_{i}", f"<pre>{text}</pre>", step)
+            wandb.log({f"text_{i}": wandb.Html(f"<pre>{text}</pre>")}, step=step)
 
         # save checkpoint
         if step % config["training"]["ckpt_save_interval"] == 0:
@@ -237,6 +252,7 @@ def main(config_path: str):
                 torch.save(model.state_dict(), output_file)
             print(f"Saved checkpoint to {output_file}")
 
+    wandb_run.finish()
 
 if __name__ == "__main__":
     parser = ArgumentParser()

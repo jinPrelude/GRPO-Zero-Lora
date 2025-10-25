@@ -13,6 +13,7 @@ dependencies = [
     "tensorboard>=2.19.0",
     "tokenizers>=0.21.1",
     "torch>=2.6.0",
+    "wandb>=0.22.2",
 ]
 
 [dependency-groups]
