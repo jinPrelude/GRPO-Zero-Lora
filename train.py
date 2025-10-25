@@ -21,40 +21,39 @@ def apply_lora(model: Transformer, r=8, alpha=32, dropout=0.0):
     for p in model.parameters():
         p.requires_grad = False
 
-    trainable_params = []
     for block in model.layers:
         block.mlp.up_proj = Lora(block.mlp.up_proj, r, alpha, dropout)
         # block.mlp.down_proj = Lora(block.mlp.down_proj, r, alpha, dropout)
         # block.mlp.gate_proj = Lora(block.mlp.gate_proj, r, alpha, dropout)
-
-        trainable_params += block.mlp.up_proj.trainable_parameters()
-        # trainable_params += block.mlp.down_proj.trainable_parameters()
-        # trainable_params += block.mlp.gate_proj.trainable_parameters()
-    return model, trainable_params
+    return model
 
 @torch.no_grad()
 def export_lora_merged_state_dict(model: Transformer):
     "Return a state_dict with LoRA deltas merged into feed_forward weights & adapter weights removed."
     og_state_dict = model.state_dict()
-    merged_linear = {}
-    lora_weights = set()
+    merged = {}
+    skip = set()
     for name, module in model.named_modules():
         if isinstance(module, Lora):
             base_key = f"{name}.linear.weight"
-            lora_weights.add(f"{name}.A.weight")
-            lora_weights.add(f"{name}.B.weight")
+            skip.add(base_key)
+             # Match with original transformer weight key
+            merged_key = base_key.replace('.linear.weight', '.weight')
 
             base_w = module.linear.weight.data
             delta = module.scale * (module.B.weight.data @ module.A.weight.data)
-            merged_linear[base_key] = (base_w + delta).to(base_w.dtype)
+            merged[merged_key] = (base_w + delta).to(base_w.dtype)
+            skip.add(f"{name}.A.weight")
+            skip.add(f"{name}.B.weight")
+
     out = OrderedDict()
-    for k, v in og_state_dict.items():
-        if k in lora_weights: # skip LoRA weights
+    for key, value in og_state_dict.items():
+        if key in skip: # skip LoRA weights
             continue
-        if k in merged_linear: # replace with merged weights
-            out[k] = merged_linear[k].clone()
+        if key in merged: # replace with merged weights
+            out[key] = merged[key].clone()
         else: # keep original weights
-            out[k] = v
+            out[key] = value
     return out
 
 def evaluate(model, tokenizer, device, dtype, config):
@@ -129,13 +128,15 @@ def main(config_path: str):
     )
 
     model = Transformer.from_pretrained(pretrained_model_path, device=device).train()
-    trainable_parameters = model.parameters()
 
     if config["training"]["use_lora"]:
-        model, trainable_parameters = apply_lora(
-            model, config["training"]["lora_rank"], config["training"]["lora_alpha"], config["training"]["lora_dropout"]
+        apply_lora(
+            model,
+            config["training"]["lora_rank"],
+            config["training"]["lora_alpha"],
+            config["training"]["lora_dropout"],
         )
-
+    trainable_parameters = [p for p in model.parameters() if p.requires_grad]
     optimizer = AdamW(
         trainable_parameters,
         lr=config["training"]["learning_rate"],
