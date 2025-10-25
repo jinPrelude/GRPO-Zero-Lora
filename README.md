@@ -1,3 +1,7 @@
+# GRPO-Zero w/ LoRA
+
+This repository is a fork of GRPO-Zero, with minimal [LoRA (Low-Rank Adaptation)](https://arxiv.org/abs/2106.09685) implementation. LoRA can be enabled or disabled via the `config.yaml` file. Additionally, you can adjust the LoRA parameters(`rank`, `alpha`, `dropout`) through the same configuration file.
+
 # GRPO:Zero
 
 GRPO training with minimal dependencies (and low GPU memory usage!). We implement almost everything from scratch and only depend on `tokenizers` for tokenization and `pytorch` for training. 
